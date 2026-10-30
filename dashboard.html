@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>IT Service Monitoring Dashboard</title>
+    <style>
+    body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f6f9;
+        color: #333;
+        margin: 0;
+        padding: 30px;
+    }
+
+    h1 {
+        color: #1e3a5f;
+        margin-bottom: 30px;
+    }
+
+    h2 {
+        color: #1e3a5f;
+        margin-top: 30px;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        background-color: white;
+        margin-top: 15px;
+    }
+
+    th {
+        background-color: #1e3a5f;
+        color: white;
+        padding: 12px;
+        text-align: left;
+    }
+
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #ddd;
+    }
+
+    tr:hover {
+        background-color: #f1f5f9;
+    }
+
+    p {
+        font-size: 16px;
+    }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <h1>IT Service Monitoring Dashboard</h1>
+    <h2>Historical Website Uptime</h2>
+
+<p>
+    Daily percentage of successful monitoring checks for each website.
+</p>
+
+<div style="height: 300px; position: relative;">
+    <canvas id="uptimeChart"></canvas>
+</div>
+
+<p id="chartMessage"></p>
+
+<h2>Website Response Time Trends</h2>
+
+<p>
+    Response times recorded during individual website monitoring checks.
+</p>
+
+<div style="height: 350px; position: relative;">
+    <canvas id="responseTimeChart"></canvas>
+</div>
+
+<h2>Website Response Time Analytics</h2>
+
+<p>
+    Average, minimum, and maximum website response times in milliseconds.
+</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Website</th>
+            <th>Measurements</th>
+            <th>Average (ms)</th>
+            <th>Minimum (ms)</th>
+            <th>Maximum (ms)</th>
+        </tr>
+    </thead>
+
+    <tbody id="responseTimeTable">
+    </tbody>
+</table>
+    <h2>Website Uptime Analytics</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Website</th>
+            <th>Total Checks</th>
+            <th>Successful Checks</th>
+            <th>Uptime %</th>
+        </tr>
+    </thead>
+
+    <tbody id="uptimeTable">
+    </tbody>
+</table>
+
+    <h2>Monitoring Overview</h2>
+
+<p>Total Services: <span id="totalServices">0</span></p>
+
+<p>Services UP: <span id="servicesUp">0</span></p>
+
+<p>Services DOWN: <span id="servicesDown">0</span></p>
+
+    <h2>Current Website Status</h2>
+    <p>Last updated: <span id="lastUpdated">Not yet updated</span></p>
+
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Website</th>
+                <th>Status</th>
+                <th>HTTP Code</th>
+            </tr>
+        </thead>
+
+        <tbody id="statusTable">
+        </tbody>
+    </table>
+
+    <h2>Recent Monitoring Alerts</h2>
+    
+<table>
+    <thead>
+        <tr>
+            <th>Website</th>
+            <th>Alert Type</th>
+            <th>Response Time (ms)</th>
+            <th>Time</th>
+        </tr>
+    </thead>
+
+    <tbody id="alertsTable">
+    </tbody>
+</table>
+    <h2>Monitoring History</h2>
+
+<table border="1">
+    <thead>
+        <tr>
+            <th>Website</th>
+            <th>Status</th>
+            <th>HTTP Code</th>
+            <th>Checked At</th>
+        </tr>
+    </thead>
+
+    <tbody id="historyTable">
+    </tbody>
+</table>
+
+<script>
+    async function loadStatus() {
+        const response = await fetch("/check");
+
+        const data = await response.json();
+
+        const totalServices = data.length;
+
+const servicesUp = data.filter(function(service) {
+    return service.status === "UP";
+}).length;
+
+const servicesDown = data.filter(function(service) {
+    return service.status === "DOWN";
+}).length;
+
+document.getElementById("totalServices").textContent = totalServices;
+
+document.getElementById("servicesUp").textContent = servicesUp;
+
+document.getElementById("servicesDown").textContent = servicesDown;
+
+        const table = document.getElementById("statusTable");
+
+        table.innerHTML = "";
+
+        data.forEach(function(service) {
+            const row = document.createElement("tr");
+
+            const websiteCell = document.createElement("td");
+            websiteCell.textContent = service.service;
+
+            const statusCell = document.createElement("td");
+            statusCell.textContent = service.status;
+
+            if (service.status === "UP") {
+    statusCell.style.color = "green";
+} else {
+    statusCell.style.color = "red";
+}
+
+            const codeCell = document.createElement("td");
+            codeCell.textContent = service.status_code ?? "N/A";
+
+            row.appendChild(websiteCell);
+            row.appendChild(statusCell);
+            row.appendChild(codeCell);
+
+            table.appendChild(row);
+        });
+        const currentTime = new Date();
+
+document.getElementById("lastUpdated").textContent =
+    currentTime.toLocaleTimeString();
+    }
+
+    async function loadHistory() {
+    const response = await fetch("/history");
+
+    const data = await response.json();
+
+    const table = document.getElementById("historyTable");
+
+    table.innerHTML = "";
+
+    data.forEach(function(record) {
+        const row = document.createElement("tr");
+
+        const websiteCell = document.createElement("td");
+        websiteCell.textContent = record.service_url;
+
+        const statusCell = document.createElement("td");
+        statusCell.textContent = record.status;
+
+        const codeCell = document.createElement("td");
+        codeCell.textContent = record.status_code ?? "N/A";
+
+        const timeCell = document.createElement("td");
+        timeCell.textContent = new Date(record.checked_at).toLocaleString();
+
+        row.appendChild(websiteCell);
+        row.appendChild(statusCell);
+        row.appendChild(codeCell);
+        row.appendChild(timeCell);
+
+        table.appendChild(row);
+    });
+}
+
+async function loadUptime() {
+    const response = await fetch("/uptime");
+
+    const data = await response.json();
+
+    const table = document.getElementById("uptimeTable");
+
+    table.innerHTML = "";
+
+    data.forEach(function(record) {
+        const row = document.createElement("tr");
+
+        const websiteCell = document.createElement("td");
+        websiteCell.textContent = record.service_url;
+
+        const totalCell = document.createElement("td");
+        totalCell.textContent = record.total_checks;
+
+        const successfulCell = document.createElement("td");
+        successfulCell.textContent = record.successful_checks;
+
+        const uptimeCell = document.createElement("td");
+        uptimeCell.textContent = Number(record.uptime_percentage).toFixed(2) + "%";
+
+        row.appendChild(websiteCell);
+        row.appendChild(totalCell);
+        row.appendChild(successfulCell);
+        row.appendChild(uptimeCell);
+
+        table.appendChild(row);
+    });
+}
+
+async function loadAlerts() {
+    const response = await fetch("/alerts");
+
+    const data = await response.json();
+
+    const table = document.getElementById("alertsTable");
+
+    table.innerHTML = "";
+
+    data.forEach(function(alert) {
+        const row = document.createElement("tr");
+
+        const websiteCell = document.createElement("td");
+        websiteCell.textContent = alert.service_url;
+
+        const typeCell = document.createElement("td");
+        typeCell.textContent = alert.alert_type;
+
+        if (alert.alert_type === "DOWN") {
+    typeCell.style.color = "red";
+
+} else if (alert.alert_type === "SLOW") {
+    typeCell.style.color = "orange";
+
+} else if (
+    alert.alert_type === "RECOVERY" ||
+    alert.alert_type === "NORMAL"
+) {
+    typeCell.style.color = "green";
+
+} else {
+    typeCell.style.color = "black";
+}
+
+        const responseTimeCell = document.createElement("td");
+
+responseTimeCell.textContent =
+    alert.response_time_ms !== null
+        ? Number(alert.response_time_ms).toFixed(2)
+        : "—";
+        
+        const timeCell = document.createElement("td");
+        timeCell.textContent = new Date(alert.created_at).toLocaleString();
+
+        row.appendChild(websiteCell);
+        row.appendChild(typeCell);
+        row.appendChild(responseTimeCell);
+        row.appendChild(timeCell);
+
+        table.appendChild(row);
+    });
+}
+
+let uptimeChart = null;
+
+async function loadUptimeChart() {
+    const response = await fetch("/uptime-history");
+    const data = await response.json();
+
+    const dates = [...new Set(data.map(record => record.check_date))];
+
+    const websites = [...new Set(data.map(record => record.service_url))];
+
+    const chartMessage = document.getElementById("chartMessage");
+
+if (dates.length < 2) {
+    chartMessage.textContent =
+        "Only one day of monitoring data is available. Trends will appear as more daily records are collected.";
+} else {
+    chartMessage.textContent = "";
+}
+
+    const datasets = websites.map(function(website) {
+        return {
+            label: website,
+            data: dates.map(function(date) {
+                const record = data.find(function(item) {
+                    return item.service_url === website &&
+                           item.check_date === date;
+                });
+
+                return record ? Number(record.uptime_percentage) : null;
+            }),
+            tension: 0.2,
+            spanGaps: false
+        };
+    });
+
+    const canvas = document.getElementById("uptimeChart");
+
+    if (uptimeChart) {
+        uptimeChart.destroy();
+    }
+
+    uptimeChart = new Chart(canvas, {
+        type: "line",
+        data: {
+            labels: dates,
+            datasets: datasets
+        },
+        options: {
+    responsive: true,
+    maintainAspectRatio: false,
+
+    plugins: {
+        tooltip: {
+            callbacks: {
+                label: function(context) {
+                    return context.dataset.label + ": " +
+                           context.parsed.y + "% uptime";
+                }
+            }
+        }
+    },
+
+    scales: {
+        x: {
+            title: {
+                display: true,
+                text: "Monitoring Date"
+            }
+        },
+
+        y: {
+            min: 0,
+            max: 100,
+            title: {
+                display: true,
+                text: "Uptime (%)"
+            }
+        }
+    }
+}
+    });
+}
+
+async function loadResponseTimes() {
+    const response = await fetch("/response-times");
+
+    const data = await response.json();
+
+    const table = document.getElementById("responseTimeTable");
+
+    table.innerHTML = "";
+
+    data.forEach(function(record) {
+        const row = document.createElement("tr");
+
+        const values = [
+            record.service_url,
+            record.total_measurements,
+            record.avg_response_time_ms,
+            record.min_response_time_ms,
+            record.max_response_time_ms
+        ];
+
+        values.forEach(function(value) {
+            const cell = document.createElement("td");
+
+            cell.textContent = value;
+
+            row.appendChild(cell);
+        });
+
+        table.appendChild(row);
+    });
+}
+
+let responseTimeChart = null;
+
+async function loadResponseTimeChart() {
+    const response = await fetch("/response-time-history");
+    const data = await response.json();
+
+    const websites = [...new Set(data.map(record => record.service_url))];
+
+    const datasets = websites.map(function(website) {
+        const measurements = data
+            .filter(record => record.service_url === website)
+            .sort((a, b) => new Date(a.checked_at) - new Date(b.checked_at));
+
+        return {
+            label: website,
+            data: measurements.map(function(record) {
+                return {
+                    x: new Date(record.checked_at).getTime(),
+                    y: Number(record.response_time_ms)
+                };
+            }),
+            tension: 0.2,
+            pointRadius: 3
+        };
+    });
+
+    const canvas = document.getElementById("responseTimeChart");
+
+    if (responseTimeChart) {
+        responseTimeChart.destroy();
+    }
+
+    responseTimeChart = new Chart(canvas, {
+        type: "line",
+        data: {
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+
+            interaction: {
+                mode: "nearest",
+                intersect: false
+            },
+
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        title: function(items) {
+                            return new Date(items[0].parsed.x).toLocaleString();
+                        },
+                        label: function(context) {
+                            return context.dataset.label + ": " +
+                                   context.parsed.y + " ms";
+                        }
+                    }
+                }
+            },
+
+            scales: {
+                x: {
+                    type: "linear",
+                    title: {
+                        display: true,
+                        text: "Monitoring Time"
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return new Date(value).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit"
+                            });
+                        }
+                    }
+                },
+
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: "Response Time (ms)"
+                    }
+                }
+            }
+        }
+    });
+}
+
+loadStatus();
+loadHistory();
+loadUptime();
+loadAlerts();
+loadResponseTimeChart();
+loadResponseTimes();
+loadUptimeChart();
+
+setInterval(loadStatus, 60000);
+setInterval(loadHistory, 60000);
+setInterval(loadUptime, 60000);
+setInterval(loadAlerts, 60000);
+setInterval(loadUptimeChart, 60000);
+setInterval(loadResponseTimes, 60000);
+setInterval(loadResponseTimeChart, 60000);
+
+
+</script>
+</body>
+</html>
