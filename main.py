@@ -27,7 +27,7 @@ previous_performance = {}
 
 def save_alert_to_database(url, alert_type, response_time_ms=None):
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -183,7 +183,7 @@ def check_services():
 @app.get("/history")
 def get_history():
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -208,7 +208,7 @@ def dashboard():
 
 def save_results_to_database(current_results):
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -236,7 +236,7 @@ def save_results_to_database(current_results):
 @app.get("/uptime")
 def get_uptime():
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"), 
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -266,7 +266,7 @@ def get_uptime():
 @app.get("/alerts")
 def get_alerts():
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -275,11 +275,11 @@ def get_alerts():
 
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute("""
-    SELECT id, service_url, alert_type, response_time_ms, created_at
-    FROM public.monitoring_alerts
-    ORDER BY created_at DESC
-    LIMIT 100;
-""")
+                SELECT id, service_url, alert_type, created_at
+                FROM public.monitoring_alerts
+                ORDER BY created_at DESC
+                LIMIT 100;
+            """)
 
             records = cursor.fetchall()
 
@@ -288,7 +288,7 @@ def get_alerts():
 @app.get("/uptime-history")
 def get_uptime_history():
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -321,7 +321,7 @@ def get_uptime_history():
 @app.get("/response-times")
 def get_response_times():
     with psycopg.connect(
-        host="localhost",
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -350,7 +350,7 @@ def get_response_times():
 @app.get("/response-time-history")
 def get_response_time_history():
     with psycopg.connect(
-        host="localhost",
+       host=os.environ.get("DB_HOST", "localhost"), 
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",

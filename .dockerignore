@@ -1,0 +1,17 @@
+.venv/
+.venv_backup/
+__pycache__/
+*.pyc
+
+.git/
+.gitignore
+
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+
+.DS_Store
+.vscode/
