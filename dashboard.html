@@ -121,6 +121,8 @@
 
 <p>Services DOWN: <span id="servicesDown">0</span></p>
 
+<p>Monitoring Errors: <span id="servicesError">0</span></p>
+
     <h2>Current Website Status</h2>
     <p>Last updated: <span id="lastUpdated">Not yet updated</span></p>
 
@@ -138,7 +140,7 @@
     </table>
 
     <h2>Recent Monitoring Alerts</h2>
-    
+
 <table>
     <thead>
         <tr>
@@ -184,6 +186,12 @@ const servicesDown = data.filter(function(service) {
     return service.status === "DOWN";
 }).length;
 
+const servicesError = data.filter(function(service) {
+    return service.status === "ERROR";
+}).length;
+
+document.getElementById("servicesError").textContent = servicesError;
+
 document.getElementById("totalServices").textContent = totalServices;
 
 document.getElementById("servicesUp").textContent = servicesUp;
@@ -205,8 +213,10 @@ document.getElementById("servicesDown").textContent = servicesDown;
 
             if (service.status === "UP") {
     statusCell.style.color = "green";
-} else {
+} else if (service.status === "DOWN") {
     statusCell.style.color = "red";
+} else {
+    statusCell.style.color = "orange";
 }
 
             const codeCell = document.createElement("td");
@@ -324,12 +334,20 @@ async function loadAlerts() {
     typeCell.style.color = "black";
 }
 
-        const responseTimeCell = document.createElement("td");
+        
+const responseTimeCell = document.createElement("td");
+
+const responseTime = alert.response_time_ms;
+const numericResponseTime = Number(responseTime);
 
 responseTimeCell.textContent =
-    alert.response_time_ms !== null
-        ? Number(alert.response_time_ms).toFixed(2)
+    responseTime !== null &&
+    responseTime !== undefined &&
+    responseTime !== "" &&
+    Number.isFinite(numericResponseTime)
+        ? numericResponseTime.toFixed(2)
         : "—";
+
         
         const timeCell = document.createElement("td");
         timeCell.textContent = new Date(alert.created_at).toLocaleString();

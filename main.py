@@ -130,13 +130,23 @@ async def monitor_services():
                         "response_time_ms": response_time_ms
                     })
 
-                except httpx.RequestError:
+                
+                except httpx.RequestError as error:
+                    print(
+                        f"MONITORING ERROR: {url} - "
+                        f"{type(error).__name__}: {error}",
+                        flush=True
+                    )
+
+                    previous_performance.pop(url, None)
+
                     current_results.append({
                         "service": url,
-                        "status": "DOWN",
+                        "status": "ERROR",
                         "status_code": None,
                         "response_time_ms": None
                     })
+
 
         results.clear()
         results.extend(current_results)
@@ -275,11 +285,11 @@ def get_alerts():
 
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute("""
-                SELECT id, service_url, alert_type, created_at
-                FROM public.monitoring_alerts
-                ORDER BY created_at DESC
-                LIMIT 100;
-            """)
+    SELECT id, service_url, alert_type, response_time_ms, created_at
+    FROM public.monitoring_alerts
+    ORDER BY created_at DESC
+    LIMIT 100;
+""")
 
             records = cursor.fetchall()
 
