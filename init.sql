@@ -1,0 +1,16 @@
+CREATE TABLE IF NOT EXISTS public.monitoring_history (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    service_url TEXT NOT NULL,
+    status VARCHAR NOT NULL,
+    status_code INTEGER,
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    response_time_ms DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS public.monitoring_alerts (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    service_url TEXT NOT NULL,
+    alert_type VARCHAR NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    response_time_ms DOUBLE PRECISION
+);
