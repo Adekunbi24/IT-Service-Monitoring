@@ -1,3 +1,5 @@
+import ipaddress
+import socket
 import time
 import os
 import psycopg
@@ -7,7 +9,8 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, HttpUrl
 
 from fastapi.responses import FileResponse
 
@@ -19,11 +22,40 @@ services = [
 
 SLOW_RESPONSE_THRESHOLD_MS = 500
 
+from pydantic import Field
+
+class MonitoredServiceCreate(BaseModel):
+    service_url: HttpUrl
+    check_interval_seconds: int = Field(default=60, ge=10)
+    slow_threshold_ms: float = Field(default=2000, gt=0)
+
+def is_public_ip(ip_address):
+    address = ipaddress.ip_address(ip_address)
+    return address.is_global
+
+def has_only_public_ips(hostname):
+    try:
+        addresses = socket.getaddrinfo(
+            hostname,
+            None,
+            type=socket.SOCK_STREAM
+        )
+
+        return bool(addresses) and all(
+            is_public_ip(address[4][0])
+            for address in addresses
+        )
+
+    except (socket.gaierror, ValueError):
+        return False
+
 results = []
 
 previous_statuses = {}
 
 previous_performance = {}
+
+last_check_times = {}
 
 def save_alert_to_database(url, alert_type, response_time_ms=None):
     with psycopg.connect(
@@ -71,12 +103,124 @@ async def detect_status_changes(current_results):
 
         previous_statuses[url] = current_status
 
+def get_monitored_services():
+    with psycopg.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        port=5432,
+        dbname="it_service_monitoring",
+        user="postgres",
+        password=os.environ["DB_PASSWORD"]
+    ) as connection:
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+    SELECT service_url, check_interval_seconds, slow_threshold_ms
+    FROM public.monitored_services
+    WHERE is_active = TRUE;
+""")
+            rows = cursor.fetchall()
+
+    return [
+        {
+            "service_url": row[0],
+            "check_interval_seconds": row[1],
+            "slow_threshold_ms": row[2]
+        }
+        for row in rows
+    ]
+
+def save_monitored_service(
+    service_url,
+    check_interval_seconds,
+    slow_threshold_ms
+):
+    with psycopg.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        port=5432,
+        dbname="it_service_monitoring",
+        user="postgres",
+        password=os.environ["DB_PASSWORD"]
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO public.monitored_services (
+                    service_url,
+                    check_interval_seconds,
+                    slow_threshold_ms
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT (service_url)
+                DO UPDATE SET
+                    check_interval_seconds = EXCLUDED.check_interval_seconds,
+                    slow_threshold_ms = EXCLUDED.slow_threshold_ms;
+            """, (
+                service_url,
+                check_interval_seconds,
+                slow_threshold_ms
+            ))
+def set_service_active(service_url: str, is_active: bool):
+    with psycopg.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        port=5432,
+        dbname="it_service_monitoring",
+        user="postgres",
+        password=os.environ["DB_PASSWORD"]
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE public.monitored_services
+                SET is_active = %s
+                WHERE service_url = %s
+                RETURNING service_url;
+                """,
+                (is_active, service_url)
+            )
+
+            return cursor.fetchone() is not None
+
 async def monitor_services():
     while True:
         current_results = []
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for url in services:
+        active_services = await asyncio.to_thread(get_monitored_services)
+
+        active_urls = {
+            service["service_url"]
+            for service in active_services
+        }
+
+        results[:] = [
+            result
+            for result in results
+            if result["service"] in active_urls
+        ]
+
+        for url in list(last_check_times):
+            if url not in active_urls:
+                last_check_times.pop(url, None)
+                previous_statuses.pop(url, None)
+                previous_performance.pop(url, None)
+
+        async with httpx.AsyncClient(
+            timeout=5.0,
+            follow_redirects=False,
+            trust_env=False
+        ) as client:
+            for service in active_services:
+                url = service["service_url"]
+                check_interval_seconds = service["check_interval_seconds"]
+                slow_threshold_ms = service["slow_threshold_ms"]
+                now = time.monotonic()
+                last_checked = last_check_times.get(url)
+
+                if last_checked is not None:
+                    elapsed_time = now - last_checked
+
+                    if elapsed_time < check_interval_seconds:
+                        continue
+
+                last_check_times[url] = now
                 try:
                     start_time = time.perf_counter()
 
@@ -91,7 +235,7 @@ async def monitor_services():
                     if status == "UP":
                         current_performance = (
                             "SLOW"
-                            if response_time_ms > SLOW_RESPONSE_THRESHOLD_MS
+                            if response_time_ms > slow_threshold_ms
                             else "NORMAL"
                         )
 
@@ -147,21 +291,36 @@ async def monitor_services():
                         "response_time_ms": None
                     })
 
+        for new_result in current_results:
+            existing_result = next(
+                (
+                    result
+                    for result in results
+                    if result["service"] == new_result["service"]
+                ),
+                None
+            )
 
-        results.clear()
-        results.extend(current_results)
+            if existing_result is not None:
+                results.remove(existing_result)
 
-        await detect_status_changes(current_results)
+            results.append(new_result)
 
-        print("Automatic monitoring completed:", results)
-        try:
-            await asyncio.to_thread(save_results_to_database, current_results)
-            print("Monitoring results saved to PostgreSQL!")
-        except psycopg.Error as error:
-            print("Database error:", error)
+            if current_results:
+                await detect_status_changes(current_results)
 
-        await asyncio.sleep(60)
+            print("Automatic monitoring completed:", current_results)
 
+            try:
+                await asyncio.to_thread(
+                    save_results_to_database,
+                    current_results
+                )
+                print("Monitoring results saved to PostgreSQL!")
+            except psycopg.Error as error:
+                print("Database error:", error)
+
+        await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -180,6 +339,81 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+@app.post("/services")
+def add_service(service: MonitoredServiceCreate):
+    if service.service_url.scheme != "https":
+        raise HTTPException(
+            status_code=400,
+            detail="Only HTTPS websites are allowed"
+        )
+
+    if service.service_url.port not in (None, 443):
+        raise HTTPException(
+            status_code=400,
+            detail="Only the standard HTTPS port (443) is allowed"
+        )
+
+    normalized_url = str(service.service_url).rstrip("/")
+    hostname = service.service_url.host
+
+    if not has_only_public_ips(hostname):
+        raise HTTPException(
+            status_code=400,
+            detail="Website must resolve only to public IP addresses"
+        )
+
+    try:
+        save_monitored_service(
+             normalized_url,
+            service.check_interval_seconds,
+            service.slow_threshold_ms
+        )
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save monitoring configuration"
+        )
+
+    return {
+        "message": "Monitoring configuration saved successfully",
+        "service_url": normalized_url,
+        "check_interval_seconds": service.check_interval_seconds,
+        "slow_threshold_ms": service.slow_threshold_ms
+    }
+
+
+class ServiceStatusUpdate(BaseModel):
+    service_url: HttpUrl
+    is_active: bool
+
+
+@app.patch("/services/status")
+def update_service_status(service: ServiceStatusUpdate):
+    normalized_url = str(service.service_url).rstrip("/")
+
+    try:
+        updated = set_service_active(
+            normalized_url,
+            service.is_active
+        )
+    except psycopg.Error:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update monitoring status"
+        )
+
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Monitored service not found"
+        )
+
+    return {
+        "message": "Monitoring status updated successfully",
+        "service_url": normalized_url,
+        "is_active": service.is_active
+    }
 
 @app.get("/")
 def home():

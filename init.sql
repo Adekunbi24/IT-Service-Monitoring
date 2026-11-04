@@ -14,3 +14,11 @@ CREATE TABLE IF NOT EXISTS public.monitoring_alerts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     response_time_ms DOUBLE PRECISION
 );
+
+CREATE TABLE IF NOT EXISTS public.monitored_services (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    service_url TEXT NOT NULL UNIQUE,
+    check_interval_seconds INTEGER NOT NULL DEFAULT 60,
+    slow_threshold_ms DOUBLE PRECISION NOT NULL DEFAULT 2000,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
