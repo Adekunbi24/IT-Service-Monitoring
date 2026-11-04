@@ -85,7 +85,7 @@ async def detect_status_changes(current_results):
 
         previous_status = previous_statuses.get(url)
 
-        if previous_status == "UP" and current_status == "DOWN":
+        if previous_status == "UP" and current_status in ("DOWN", "ERROR"):
             print(f"ALERT: {url} is DOWN!")
 
             try:
@@ -93,7 +93,7 @@ async def detect_status_changes(current_results):
             except psycopg.Error as error:
                 print("Failed to save alert:", error)
 
-        elif previous_status == "DOWN" and current_status == "UP":
+        elif previous_status in ("DOWN", "ERROR") and current_status == "UP":
             print(f"RECOVERY: {url} is back UP!")
 
             try:
@@ -183,7 +183,12 @@ async def monitor_services():
     while True:
         current_results = []
 
-        active_services = await asyncio.to_thread(get_monitored_services)
+        try:
+            active_services = await asyncio.to_thread(get_monitored_services)
+        except psycopg.Error as error:
+            print("Failed to load monitored services:", error)
+            await asyncio.sleep(5)
+            continue
 
         active_urls = {
             service["service_url"]
@@ -291,23 +296,23 @@ async def monitor_services():
                         "response_time_ms": None
                     })
 
-        for new_result in current_results:
-            existing_result = next(
-                (
-                    result
-                    for result in results
-                    if result["service"] == new_result["service"]
-                ),
-                None
-            )
+            for new_result in current_results:
+                existing_result = next(
+                    (
+                        result
+                        for result in results
+                        if result["service"] == new_result["service"]
+                    ),
+                    None
+                )
 
-            if existing_result is not None:
-                results.remove(existing_result)
+                if existing_result is not None:
+                    results.remove(existing_result)
 
-            results.append(new_result)
+                results.append(new_result)
 
-            if current_results:
-                await detect_status_changes(current_results)
+        if current_results:
+            await detect_status_changes(current_results)
 
             print("Automatic monitoring completed:", current_results)
 

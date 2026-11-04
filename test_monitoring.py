@@ -341,5 +341,55 @@ def test_monitoring_skips_service_before_interval():
     asyncio.run(run_test())
 
 
+def test_connection_error_triggers_down_alert(monkeypatch):
+    main.previous_statuses.clear()
+    main.previous_statuses["https://example.com"] = "UP"
+
+    saved_alerts = []
+
+    def fake_save_alert(url, status):
+        saved_alerts.append((url, status))
+
+    monkeypatch.setattr(
+        main,
+        "save_alert_to_database",
+        fake_save_alert
+    )
+
+    asyncio.run(main.detect_status_changes([
+    {
+        "service": "https://example.com",
+        "status": "ERROR"
+    }
+]))
+
+    assert saved_alerts == [
+        ("https://example.com", "DOWN")
+    ]
 
 
+def test_connection_error_recovery_alert(monkeypatch):
+    main.previous_statuses.clear()
+    main.previous_statuses["https://example.com"] = "ERROR"
+
+    saved_alerts = []
+
+    def fake_save_alert(url, status):
+        saved_alerts.append((url, status))
+
+    monkeypatch.setattr(
+        main,
+        "save_alert_to_database",
+        fake_save_alert
+    )
+
+    asyncio.run(main.detect_status_changes([
+        {
+            "service": "https://example.com",
+            "status": "UP"
+        }
+    ]))
+
+    assert saved_alerts == [
+        ("https://example.com", "RECOVERY")
+    ]
