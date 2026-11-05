@@ -643,7 +643,7 @@ def get_history():
                 SELECT id, service_url, status, status_code, checked_at
                 FROM public.monitoring_history
                 ORDER BY checked_at DESC
-                LIMIT 100;
+                LIMIT 10;
             """)
 
             records = cursor.fetchall()
@@ -726,7 +726,7 @@ def get_alerts():
     SELECT id, service_url, alert_type, response_time_ms, created_at
     FROM public.monitoring_alerts
     ORDER BY created_at DESC
-    LIMIT 100;
+    LIMIT 10;
 """)
 
             records = cursor.fetchall()

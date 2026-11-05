@@ -165,6 +165,21 @@
         </tbody>
     </table>
 
+    <h2>Recent Monitoring Checks</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Website</th>
+            <th>Status</th>
+            <th>HTTP Code</th>
+            <th>Checked At</th>
+        </tr>
+    </thead>
+    <tbody id="historyTable">
+    </tbody>
+</table>
+
     <h2>Recent Monitoring Alerts</h2>
 
 <table>
@@ -459,6 +474,43 @@ async function loadUptime() {
     });
 }
 
+async function loadHistory() {
+    const response = await fetch("/history");
+
+    if (!response.ok) {
+        console.error("Failed to load monitoring history");
+        return;
+    }
+
+    const data = await response.json();
+    const table = document.getElementById("historyTable");
+
+    table.innerHTML = "";
+
+    data.forEach(function(record) {
+        const row = document.createElement("tr");
+
+        const websiteCell = document.createElement("td");
+        websiteCell.textContent = record.service_url;
+
+        const statusCell = document.createElement("td");
+        statusCell.textContent = record.status;
+
+        const codeCell = document.createElement("td");
+        codeCell.textContent = record.status_code ?? "N/A";
+
+        const timeCell = document.createElement("td");
+        timeCell.textContent = new Date(record.checked_at).toLocaleString();
+
+        row.appendChild(websiteCell);
+        row.appendChild(statusCell);
+        row.appendChild(codeCell);
+        row.appendChild(timeCell);
+
+        table.appendChild(row);
+    });
+}
+
 async function loadAlerts() {
     const response = await fetch("/alerts");
 
@@ -726,6 +778,7 @@ async function loadResponseTimeChart() {
 
 loadStatus();
 loadUptime();
+loadHistory();
 loadAlerts();
 loadResponseTimeChart();
 loadResponseTimes();
@@ -733,6 +786,7 @@ loadUptimeChart();
 
 setInterval(loadStatus, 60000);
 setInterval(loadUptime, 60000);
+setInterval(loadHistory, 60000);
 setInterval(loadAlerts, 60000);
 setInterval(loadUptimeChart, 60000);
 setInterval(loadResponseTimes, 60000);
