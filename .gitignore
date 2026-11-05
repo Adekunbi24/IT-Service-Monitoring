@@ -1,21 +1,29 @@
-# Python virtual environments
 .venv/
 .venv_backup/
 venv/
-
-# Python-generated files
 __pycache__/
 *.pyc
-
-# Environment variables and secrets
 .env
 .env.*
 !.env.example
 *.pem
 *.key
-
-# macOS files
 .DS_Store
-
-# VS Code local settings
 .vscode/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+*.tfplan
+
+# Terraform plans and generated files
+tfplan
+*.tfplan
+*.tfplan.*
+*.tfstate.backup
+
+# Local backup files
+main_backup.py
+dashboard__backup.html

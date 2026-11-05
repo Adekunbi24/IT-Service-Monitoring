@@ -1,7 +1,20 @@
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from fastapi import Request
+from pydantic import SecretStr
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
+from starlette.middleware.sessions import SessionMiddleware
+import secrets
+from fastapi import Depends, Security, Request
+from fastapi.security import APIKeyHeader
 import ipaddress
 import socket
 import time
 import os
+import logging
 import psycopg
 from psycopg.rows import dict_row
 
@@ -10,17 +23,86 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 
 from fastapi.responses import FileResponse
 
-services = [
-    "https://example.com",
-    "https://github.com",
-    "https://www.python.org"
-]
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("service_monitor")
 
-SLOW_RESPONSE_THRESHOLD_MS = 500
+admin_key_header = APIKeyHeader(
+    name="X-Admin-Key",
+    auto_error=False
+)
+
+def require_admin(
+    request: Request,
+    api_key: str | None = Security(admin_key_header)
+):
+    expected_key = os.environ.get("ADMIN_API_KEY")
+
+    # Option 1: Authenticate using the existing API key
+    if api_key is not None:
+        if not expected_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Administrator authentication is not configured"
+            )
+
+        if not secrets.compare_digest(api_key, expected_key):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid administrator credentials"
+            )
+
+        return True
+
+    # Option 2: Authenticate using an administrator browser session
+    if request.session.get("admin") is True:
+
+        # Require CSRF protection for requests that change data
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            if not verify_csrf_token(request):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid or missing CSRF token"
+                )
+
+        return True
+
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid administrator credentials"
+    )
+
+password_hasher = PasswordHasher()
+
+def verify_admin_password(password: str) -> bool:
+    stored_hash = os.environ.get("ADMIN_PASSWORD_HASH")
+
+    if not stored_hash:
+        return False
+
+    try:
+        return password_hasher.verify(stored_hash, password)
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
+
+
+def verify_csrf_token(request: Request) -> bool:
+    expected_token = request.session.get("csrf_token")
+    supplied_token = request.headers.get("X-CSRF-Token")
+
+    return bool(
+        expected_token
+        and supplied_token
+        and secrets.compare_digest(expected_token, supplied_token)
+    )
+
+class AdminLogin(BaseModel):
+    password: SecretStr
+
 
 from pydantic import Field
 
@@ -46,7 +128,7 @@ def has_only_public_ips(hostname):
             for address in addresses
         )
 
-    except (socket.gaierror, ValueError):
+    except (socket.gaierror, ValueError, OSError):
         return False
 
 results = []
@@ -226,16 +308,28 @@ async def monitor_services():
                         continue
 
                 last_check_times[url] = now
+                # DNS may change after registration. Recheck before every request.
+                # This reduces risk, but is not a complete DNS-rebinding defense.
+                from urllib.parse import urlsplit
+                hostname = urlsplit(url).hostname
+                if not hostname or not await asyncio.to_thread(has_only_public_ips, hostname):
+                    logger.warning("Skipping website with unsafe or unresolvable DNS: %s", url)
+                    current_results.append({"service": url, "status": "ERROR", "status_code": None, "response_time_ms": None})
+                    previous_performance.pop(url, None)
+                    continue
                 try:
                     start_time = time.perf_counter()
 
-                    response = await client.get(url)
+                    response = await client.get(url, follow_redirects=False)
 
                     end_time = time.perf_counter()
 
                     response_time_ms = round((end_time - start_time) * 1000, 2)
 
-                    status = "UP" if response.status_code == 200 else "DOWN"
+                    if 200 <= response.status_code < 400:
+                        status = "UP"
+                    else:
+                        status = "DOWN"
 
                     if status == "UP":
                         current_performance = (
@@ -295,6 +389,10 @@ async def monitor_services():
                         "status_code": None,
                         "response_time_ms": None
                     })
+                except Exception:
+                    logger.exception("Unexpected monitoring failure for %s", url)
+                    previous_performance.pop(url, None)
+                    current_results.append({"service": url, "status": "ERROR", "status_code": None, "response_time_ms": None})
 
             for new_result in current_results:
                 existing_result = next(
@@ -344,9 +442,107 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+@app.exception_handler(psycopg.Error)
+async def database_exception_handler(request: Request, exc: psycopg.Error):
+    logger.error("Database operation failed at %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(status_code=503, content={"detail": "Database temporarily unavailable"})
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ["SESSION_SECRET_KEY"],
+    session_cookie="monitoring_session",
+    max_age=3600,
+    same_site="lax",
+    https_only=os.getenv("COOKIE_SECURE", "false").lower() == "true"
+)
+
+@app.post("/admin/login")
+@limiter.limit("5/minute")
+def admin_login(request: Request, credentials: AdminLogin):
+    if not verify_admin_password(credentials.password.get_secret_value()):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid administrator credentials"
+        )
+
+    request.session.clear()
+    request.session["admin"] = True
+    request.session["csrf_token"] = secrets.token_urlsafe(32)
+
+    return {"message": "Login successful"}
+
+@app.get("/admin/csrf-token")
+def get_admin_csrf_token(request: Request):
+    if request.session.get("admin") is not True:
+        raise HTTPException(
+            status_code=401,
+            detail="Administrator login required"
+        )
+
+    token = request.session.get("csrf_token")
+
+    if not token:
+        raise HTTPException(
+            status_code=403,
+            detail="CSRF token unavailable"
+        )
+
+    return {"csrf_token": token}
+
+@app.post("/admin/logout")
+def admin_logout(request: Request):
+    if request.session.get("admin") is not True:
+        raise HTTPException(
+            status_code=401,
+            detail="Administrator login required"
+        )
+
+    if not verify_csrf_token(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing CSRF token"
+        )
+
+    request.session.clear()
+
+    return {"message": "Logout successful"}
+
+@app.get("/services", dependencies=[Depends(require_admin)])
+def list_services():
+    try:
+        with psycopg.connect(
+            host=os.environ.get("DB_HOST", "localhost"),
+            port=5432,
+            dbname="it_service_monitoring",
+            user="postgres",
+            password=os.environ["DB_PASSWORD"]
+        ) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("""
+                    SELECT service_url, check_interval_seconds,
+                           slow_threshold_ms, is_active
+                    FROM public.monitored_services
+                    ORDER BY service_url;
+                """)
+                return cursor.fetchall()
+    except psycopg.Error:
+        raise HTTPException(status_code=500, detail="Failed to load monitored services")
+
 
 @app.post("/services")
-def add_service(service: MonitoredServiceCreate):
+def add_service(
+    service: MonitoredServiceCreate,
+    admin: bool = Depends(require_admin)
+):
     if service.service_url.scheme != "https":
         raise HTTPException(
             status_code=400,
@@ -394,7 +590,10 @@ class ServiceStatusUpdate(BaseModel):
 
 
 @app.patch("/services/status")
-def update_service_status(service: ServiceStatusUpdate):
+def update_service_status(
+    service: ServiceStatusUpdate,
+    admin: bool = Depends(require_admin)
+):
     normalized_url = str(service.service_url).rstrip("/")
 
     try:
@@ -599,7 +798,7 @@ def get_response_times():
 @app.get("/response-time-history")
 def get_response_time_history():
     with psycopg.connect(
-       host=os.environ.get("DB_HOST", "localhost"), 
+        host=os.environ.get("DB_HOST", "localhost"),
         port=5432,
         dbname="it_service_monitoring",
         user="postgres",
@@ -613,10 +812,21 @@ def get_response_time_history():
                     service_url,
                     response_time_ms,
                     checked_at
-                FROM public.monitoring_history
-                WHERE response_time_ms IS NOT NULL
-                ORDER BY checked_at DESC, id DESC
-                LIMIT 300;
+                FROM (
+                    SELECT
+                        id,
+                        service_url,
+                        response_time_ms,
+                        checked_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY service_url
+                            ORDER BY checked_at DESC, id DESC
+                        ) AS row_num
+                    FROM public.monitoring_history
+                    WHERE response_time_ms IS NOT NULL
+                ) AS ranked
+                WHERE row_num <= 100
+                ORDER BY checked_at ASC, id ASC;
             """)
 
             records = cursor.fetchall()

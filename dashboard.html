@@ -55,6 +55,32 @@
 <body>
 
     <h1>IT Service Monitoring Dashboard</h1>
+
+    <section id="adminSection" style="background:white;padding:18px;border-radius:8px;margin-bottom:24px;">
+      <h2>Administrator Access</h2>
+      <div id="loginPanel">
+        <form id="adminLoginForm">
+          <label for="adminPassword">Administrator Password:</label>
+          <input type="password" id="adminPassword" required autocomplete="current-password">
+          <button type="submit">Login</button>
+        </form>
+      </div>
+      <div id="managementPanel" hidden>
+        <button type="button" id="adminLogout">Log out</button>
+        <h3>Manage monitored websites</h3>
+        <form id="addServiceForm">
+          <label for="serviceUrl">HTTPS website URL:</label>
+          <input id="serviceUrl" type="url" placeholder="https://www.example.org" required>
+          <button type="submit">Add website</button>
+        </form>
+        <p>New websites use a 60-second check interval and a 2,000 ms slow-response threshold.</p>
+        <table>
+          <thead><tr><th>Website</th><th>Monitoring</th><th>Action</th></tr></thead>
+          <tbody id="managedServices"></tbody>
+        </table>
+      </div>
+      <p id="adminMessage" role="status" aria-live="polite"></p>
+    </section>
     <h2>Historical Website Uptime</h2>
 
 <p>
@@ -154,23 +180,156 @@
     <tbody id="alertsTable">
     </tbody>
 </table>
-    <h2>Monitoring History</h2>
 
-<table border="1">
-    <thead>
-        <tr>
-            <th>Website</th>
-            <th>Status</th>
-            <th>HTTP Code</th>
-            <th>Checked At</th>
-        </tr>
-    </thead>
-
-    <tbody id="historyTable">
-    </tbody>
-</table>
 
 <script>
+    let adminCsrfToken = null;
+
+    function showAdminPanel(loggedIn) {
+      document.getElementById("loginPanel").hidden = loggedIn;
+      document.getElementById("managementPanel").hidden = !loggedIn;
+    }
+
+    function adminMessage(text) {
+      document.getElementById("adminMessage").textContent = text;
+    }
+
+    async function adminRequest(path, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) {
+        headers["X-CSRF-Token"] = adminCsrfToken;
+      }
+      const response = await fetch(path, {
+        ...options,
+        credentials: "same-origin",
+        headers
+      });
+      if (!response.ok) {
+        if (response.status === 401) {
+          adminCsrfToken = null;
+          showAdminPanel(false);
+        }
+        let detail = `HTTP ${response.status}`;
+        try {
+          const data = await response.json();
+          if (typeof data.detail === "string") detail = data.detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      return response.json();
+    }
+
+    async function loadManagedServices() {
+      const services = await adminRequest("/services");
+      const table = document.getElementById("managedServices");
+      table.replaceChildren();
+      for (const service of services) {
+        const row = document.createElement("tr");
+        const urlCell = document.createElement("td");
+        urlCell.textContent = service.service_url;
+        const stateCell = document.createElement("td");
+        stateCell.textContent = service.is_active ? "Active" : "Inactive";
+        const actionCell = document.createElement("td");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = service.is_active ? "Deactivate" : "Activate";
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await adminRequest("/services/status", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                service_url: service.service_url,
+                is_active: !service.is_active
+              })
+            });
+            adminMessage("Monitoring status updated.");
+            await loadManagedServices();
+            await loadStatus();
+          } catch (error) {
+            adminMessage(error.message);
+            button.disabled = false;
+          }
+        });
+        actionCell.appendChild(button);
+        row.append(urlCell, stateCell, actionCell);
+        table.appendChild(row);
+      }
+    }
+
+    document.getElementById("adminLoginForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const input = document.getElementById("adminPassword");
+      const password = input.value;
+      input.value = "";
+      adminMessage("Signing in...");
+      try {
+        const response = await fetch("/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ password })
+        });
+        if (!response.ok) {
+          throw new Error(response.status === 429
+            ? "Too many login attempts. Try again later."
+            : "Login failed. Check your password.");
+        }
+        const tokenResponse = await fetch("/admin/csrf-token", { credentials: "same-origin" });
+        if (!tokenResponse.ok) throw new Error("Could not verify the login session.");
+        adminCsrfToken = (await tokenResponse.json()).csrf_token;
+        showAdminPanel(true);
+        adminMessage("Administrator login successful.");
+        await loadManagedServices();
+      } catch (error) {
+        adminMessage(error.message);
+      }
+    });
+
+    document.getElementById("addServiceForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const input = document.getElementById("serviceUrl");
+      const url = input.value.trim();
+      try {
+        await adminRequest("/services", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ service_url: url })
+        });
+        input.value = "";
+        adminMessage("Website configuration saved. If previously inactive, activate it below.");
+        await loadManagedServices();
+      } catch (error) {
+        adminMessage(error.message);
+      }
+    });
+
+    document.getElementById("adminLogout").addEventListener("click", async () => {
+      try {
+        await adminRequest("/admin/logout", { method: "POST" });
+        adminCsrfToken = null;
+        showAdminPanel(false);
+        document.getElementById("managedServices").replaceChildren();
+        adminMessage("Logged out.");
+      } catch (error) {
+        adminMessage(error.message);
+      }
+    });
+
+    // Restore a valid administrator session after refreshing the page.
+    (async function restoreAdminSession() {
+      try {
+        const response = await fetch("/admin/csrf-token", { credentials: "same-origin" });
+        if (!response.ok) return;
+        adminCsrfToken = (await response.json()).csrf_token;
+        showAdminPanel(true);
+        await loadManagedServices();
+      } catch (_) {
+        adminMessage("Could not load administrator session.");
+      }
+    })();
+
     async function loadStatus() {
         const response = await fetch("/check");
 
@@ -566,7 +725,6 @@ async function loadResponseTimeChart() {
 }
 
 loadStatus();
-loadHistory();
 loadUptime();
 loadAlerts();
 loadResponseTimeChart();
@@ -574,7 +732,6 @@ loadResponseTimes();
 loadUptimeChart();
 
 setInterval(loadStatus, 60000);
-setInterval(loadHistory, 60000);
 setInterval(loadUptime, 60000);
 setInterval(loadAlerts, 60000);
 setInterval(loadUptimeChart, 60000);

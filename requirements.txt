@@ -1,5 +1,8 @@
-fastapi
-uvicorn
-httpx
-psycopg[binary]
-pytest 
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+psycopg[binary]>=3.2,<4
+pytest>=8,<10
+itsdangerous==2.2.0
+argon2-cffi==25.1.0
+slowapi==0.1.9
